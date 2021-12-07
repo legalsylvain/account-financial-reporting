@@ -24,6 +24,7 @@ class OpenItemsReport(models.TransientModel):
     only_posted_moves = fields.Boolean()
     hide_account_at_0 = fields.Boolean()
     foreign_currency = fields.Boolean()
+    # Custom GRAP
     company_id = fields.Many2one(comodel_name='res.company')
     filter_account_ids = fields.Many2many(comodel_name='account.account')
     filter_partner_ids = fields.Many2many(comodel_name='res.partner')
@@ -57,6 +58,7 @@ class OpenItemsReportAccount(models.TransientModel):
     code = fields.Char()
     name = fields.Char()
     currency_id = fields.Many2one('res.currency')
+    child_company_id = fields.Many2one(comodel_name='res.company')
     final_amount_residual = fields.Float(digits=(16, 2))
     final_amount_total_due = fields.Float(digits=(16, 2))
     final_amount_residual_currency = fields.Float(digits=(16, 2))
@@ -207,7 +209,9 @@ WITH
                 a.code,
                 a.name,
                 a.user_type_id,
-                c.id as currency_id
+                c.id as currency_id,
+                -- Custom GRAP
+                ml.company_id child_company_id
             FROM
                 account_account a
             INNER JOIN
@@ -227,7 +231,8 @@ WITH
             """
         query_inject_account += """
             WHERE
-                a.company_id = %s
+                -- Custom GRAP (Change)
+                ml.company_id = %s
             AND a.reconcile IS true
             """
         if self.filter_account_ids:
@@ -242,7 +247,8 @@ WITH
             """
         query_inject_account += """
             GROUP BY
-                a.id, c.id
+                -- Custom GRAP (Change)
+                a.id, c.id, ml.company_id
         )
 INSERT INTO
     report_open_items_account
@@ -253,7 +259,9 @@ INSERT INTO
     account_id,
     currency_id,
     code,
-    name
+    name,
+    -- Custom GRAP (ADD)
+    child_company_id
     )
 SELECT
     %s AS report_id,
@@ -262,7 +270,9 @@ SELECT
     a.id AS account_id,
     a.currency_id,
     a.code,
-    a.name
+    a.name,
+    -- Custom GRAP (ADD)
+    a.child_company_id
 FROM
     accounts a
         """
@@ -314,6 +324,8 @@ WITH
                 account_account_type at ON a.user_type_id = at.id
             INNER JOIN
                 account_move_line ml ON a.id = ml.account_id AND ml.date <= %s
+                -- Custom GRAP (ADD)
+                AND ml.company_id = ra.child_company_id
         """
         if self.only_posted_moves:
             query_inject_partner += """
@@ -401,6 +413,8 @@ FROM
             INNER JOIN
                 account_move_line ml
                     ON ra.account_id = ml.account_id
+                    -- Custom GRAP (ADD)
+                    AND ra.child_company_id = ml.company_id
         """
         if not only_empty_partner_line:
             sub_query += """
@@ -419,10 +433,14 @@ FROM
                 account_move_line ml_future
                     ON ml.balance < 0 AND pr.debit_move_id = ml_future.id
                     AND ml_future.date > %s
+                    -- Custom GRAP (ADD)
+                    AND ml_future.company_id = ra.child_company_id
             LEFT JOIN
                 account_move_line ml_past
                     ON ml.balance < 0 AND pr.debit_move_id = ml_past.id
                     AND ml_past.date <= %s
+                    -- Custom GRAP (ADD)
+                    AND ml_past.company_id = ra.child_company_id
             """
         else:
             sub_query += """
@@ -433,10 +451,14 @@ FROM
                 account_move_line ml_future
                     ON ml.balance > 0 AND pr.credit_move_id = ml_future.id
                     AND ml_future.date > %s
+                    -- Custom GRAP (ADD)
+                    AND ml_future.company_id = ra.child_company_id
             LEFT JOIN
                 account_move_line ml_past
                     ON ml.balance > 0 AND pr.credit_move_id = ml_past.id
                     AND ml_past.date <= %s
+                    -- Custom GRAP (ADD)
+                    AND ml_past.company_id = ra.child_company_id
         """
         sub_query += """
             WHERE
@@ -568,6 +590,8 @@ INNER JOIN
     report_open_items_account ra ON rp.report_account_id = ra.id
 INNER JOIN
     account_move_line ml ON ra.account_id = ml.account_id
+    -- Custom GRAP (ADD)
+    AND ra.child_company_id = ml.company_id
 INNER JOIN
     move_lines ml2
         ON ml.id = ml2.id
